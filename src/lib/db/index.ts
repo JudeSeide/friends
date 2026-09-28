@@ -369,9 +369,9 @@ export function insertCheckin(database: Database, contactId: string, checkedInAt
     [id, contactId, checkTime, note || null, now]
   )
 
-  // Update contact's last_checkin_at
+  // Move last_checkin_at forward only; a backdated check-in is still recorded above
   database.run(
-    `UPDATE contacts SET last_checkin_at = ?, updated_at = ? WHERE id = ?`,
+    `UPDATE contacts SET last_checkin_at = MAX(COALESCE(last_checkin_at, 0), ?), updated_at = ? WHERE id = ?`,
     [checkTime, now, contactId]
   )
 
