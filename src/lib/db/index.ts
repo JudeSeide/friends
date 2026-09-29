@@ -359,6 +359,7 @@ export function getCheckins(contactId: string): Checkin[] {
   }))
 }
 
+// Does not persist; app code should call createCheckin, which persists
 export function insertCheckin(database: Database, contactId: string, checkedInAt?: number, note?: string): Checkin {
   const id = generateId()
   const now = Date.now()
@@ -379,7 +380,7 @@ export function insertCheckin(database: Database, contactId: string, checkedInAt
 }
 
 export function createCheckin(contactId: string, checkedInAt?: number, note?: string): Checkin {
-  if (!db) throw new Error('Database not initialized') // allow-bare-error: pre-existing repo convention, matches lines 171/284/300 in this file
+  if (!db) throw new Error('Database not initialized')
 
   const checkin = insertCheckin(db, contactId, checkedInAt, note)
   persist()
