@@ -33,6 +33,7 @@ import {
   type Tag,
 } from '@/lib/db'
 import { formatPeriod } from '@/lib/nudge'
+import { getTagDeleteInvalidationKeys } from '@/lib/query-keys'
 import {
   requestNotificationPermission,
   isNotificationEnabled,
@@ -60,6 +61,7 @@ const PERIODS = [
 function Settings() {
   const queryClient = useQueryClient()
   const [editingTag, setEditingTag] = useState<Tag | null>(null)
+  const [deletingTag, setDeletingTag] = useState<Tag | null>(null)
   const [isCreating, setIsCreating] = useState(false)
   const [notificationsEnabled, setNotificationsEnabled] = useState(false)
 
@@ -215,16 +217,50 @@ function Settings() {
                     </DialogContent>
                   </Dialog>
                   {!tag.is_default && (
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      onClick={() => {
-                        deleteTag(tag.id)
-                        queryClient.invalidateQueries({ queryKey: ['tags'] })
-                      }}
+                    <Dialog
+                      open={deletingTag?.id === tag.id}
+                      onOpenChange={(open) => !open && setDeletingTag(null)}
                     >
-                      <Trash2 className="h-4 w-4 text-destructive" />
-                    </Button>
+                      <DialogTrigger asChild>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          onClick={() => setDeletingTag(tag)}
+                        >
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      </DialogTrigger>
+                      <DialogContent>
+                        <DialogHeader>
+                          <DialogTitle>Delete {tag.name}?</DialogTitle>
+                        </DialogHeader>
+                        <p className="text-muted-foreground">
+                          This will remove the tag from every contact that has it.
+                        </p>
+                        <div className="flex gap-2 mt-4">
+                          <Button
+                            variant="outline"
+                            className="flex-1"
+                            onClick={() => setDeletingTag(null)}
+                          >
+                            Cancel
+                          </Button>
+                          <Button
+                            variant="destructive"
+                            className="flex-1"
+                            onClick={() => {
+                              deleteTag(tag.id)
+                              for (const queryKey of getTagDeleteInvalidationKeys()) {
+                                queryClient.invalidateQueries({ queryKey })
+                              }
+                              setDeletingTag(null)
+                            }}
+                          >
+                            Delete
+                          </Button>
+                        </div>
+                      </DialogContent>
+                    </Dialog>
                   )}
                 </div>
               </div>
