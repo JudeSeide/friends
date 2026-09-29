@@ -11,7 +11,8 @@
     "prod": "vite preview --port 5173",
     "prod:host": "npm run build && npm run prod -- --host",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@radix-ui/react-avatar": "^1.1.11",
