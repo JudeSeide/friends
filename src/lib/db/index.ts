@@ -4,7 +4,7 @@ import type { Tag, Contact, Checkin, ContactWithTag, SettingKey } from './types'
 let db: Database | null = null
 const DB_NAME = 'friends_db'
 
-const SCHEMA = `
+export const SCHEMA = `
 CREATE TABLE IF NOT EXISTS tags (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL UNIQUE,
@@ -359,27 +359,33 @@ export function getCheckins(contactId: string): Checkin[] {
   }))
 }
 
-export function createCheckin(contactId: string, checkedInAt?: number, note?: string): Checkin {
-  if (!db) throw new Error('Database not initialized')
-
+// Does not persist; app code should call createCheckin, which persists
+export function insertCheckin(database: Database, contactId: string, checkedInAt?: number, note?: string): Checkin {
   const id = generateId()
   const now = Date.now()
   const checkTime = checkedInAt || now
 
-  db.run(
+  database.run(
     `INSERT INTO checkins (id, contact_id, checked_in_at, note, created_at) VALUES (?, ?, ?, ?, ?)`,
     [id, contactId, checkTime, note || null, now]
   )
 
-  // Update contact's last_checkin_at
-  db.run(
-    `UPDATE contacts SET last_checkin_at = ?, updated_at = ? WHERE id = ?`,
+  // Move last_checkin_at forward only; a backdated check-in is still recorded above
+  database.run(
+    `UPDATE contacts SET last_checkin_at = MAX(COALESCE(last_checkin_at, 0), ?), updated_at = ? WHERE id = ?`,
     [checkTime, now, contactId]
   )
 
+  return { id, contact_id: contactId, checked_in_at: checkTime, note: note || null, created_at: now }
+}
+
+export function createCheckin(contactId: string, checkedInAt?: number, note?: string): Checkin {
+  if (!db) throw new Error('Database not initialized')
+
+  const checkin = insertCheckin(db, contactId, checkedInAt, note)
   persist()
 
-  return { id, contact_id: contactId, checked_in_at: checkTime, note: note || null, created_at: now }
+  return checkin
 }
 
 // Settings queries
