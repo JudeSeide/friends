@@ -20,7 +20,7 @@ function seedContact(database: Database, id: string, lastCheckinAt: number | nul
 
 function readLastCheckinAt(database: Database, id: string): number | null {
   const result = database.exec('SELECT last_checkin_at FROM contacts WHERE id = ?', [id])
-  return (result[0]?.values[0]?.[0] as number | null) ?? null
+  return (result[0]?.values[0]?.[0] ?? null) as number | null
 }
 
 function countCheckins(database: Database, contactId: string): number {
@@ -58,6 +58,17 @@ test('insertCheckin with today or a newer date still updates last_checkin_at', a
   const lastWeek = Date.parse('2026-09-21T00:00:00Z')
   const today = Date.parse('2026-09-28T00:00:00Z')
   seedContact(database, contactId, lastWeek)
+
+  insertCheckin(database, contactId, today)
+
+  assert.equal(readLastCheckinAt(database, contactId), today)
+})
+
+test('insertCheckin sets last_checkin_at on a contact with no prior check-in', async () => {
+  const database = await createTestDb()
+  const contactId = 'contact-4'
+  const today = Date.parse('2026-09-28T00:00:00Z')
+  seedContact(database, contactId, null)
 
   insertCheckin(database, contactId, today)
 
