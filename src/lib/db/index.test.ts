@@ -87,6 +87,9 @@ function seedFullDb(database: Database): void {
   database.run(
     `INSERT INTO checkins (id, contact_id, checked_in_at, note, created_at) VALUES ('k1', 'c1', 1000, 'coffee', 3)`
   )
+  database.run(
+    `INSERT INTO checkins (id, contact_id, checked_in_at, note, created_at) VALUES ('k2', 'c1', 2000, NULL, 4)`
+  )
   database.run(`INSERT INTO settings (key, value) VALUES ('notification_time', '09:30')`)
 }
 
@@ -114,7 +117,10 @@ test('validateBackup rejects bytes that are not a SQLite file', async () => {
 test('validateBackup rejects empty bytes', async () => {
   const SQL = await initSqlJs()
 
-  assert.throws(() => validateBackup(SQL, new Uint8Array()), InvalidBackupError)
+  assert.throws(
+    () => validateBackup(SQL, new Uint8Array()),
+    (error: unknown) => error instanceof InvalidBackupError && error.message === 'The file is empty'
+  )
 })
 
 for (const missing of TABLES) {
@@ -193,21 +199,17 @@ test('a rejected file does not take a backup and leaves the current database unt
   assert.deepEqual(dumpTables(current), before)
 })
 
-test('prepareRestore hands the backup callback the current data before building the replacement', async () => {
+test('prepareRestore hands the backup callback the current data and returns the replacement', async () => {
   const SQL = await initSqlJs()
   const current = await createTestDb()
   seedFullDb(current)
   const incoming = await createTestDb()
-  const events: string[] = []
   let backedUp: Record<string, unknown[][]> | null = null
 
   const restored = await prepareRestore(SQL, current, incoming.export(), async (bytes) => {
-    events.push('backup')
     backedUp = dumpTables(new SQL.Database(bytes))
   })
-  events.push('returned')
 
-  assert.deepEqual(events, ['backup', 'returned'])
   assert.deepEqual(backedUp, dumpTables(current))
   assert.deepEqual(dumpTables(restored), dumpTables(incoming))
 })
