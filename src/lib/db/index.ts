@@ -121,6 +121,8 @@ export async function persist(): Promise<void> {
 
 const REQUIRED_TABLES = ['tags', 'contacts', 'checkins', 'settings']
 
+export type BackupSink = (currentBytes: Uint8Array) => void | Promise<void>
+
 export class InvalidBackupError extends Error {
   constructor(message: string) {
     super(message)
@@ -190,7 +192,7 @@ export async function prepareRestore(
   SQL: SqlJsStatic,
   current: Database,
   bytes: Uint8Array,
-  backup: (currentBytes: Uint8Array) => void | Promise<void>
+  backup: BackupSink
 ): Promise<Database> {
   validateBackup(SQL, bytes)
   await backup(current.export())
@@ -204,7 +206,7 @@ export async function exportDatabase(): Promise<Uint8Array> {
 
 export async function restoreDatabase(
   bytes: Uint8Array,
-  backup: (currentBytes: Uint8Array) => void | Promise<void>
+  backup: BackupSink
 ): Promise<void> {
   const current = await initDB()
   if (!sqlModule) throw new Error('Database not initialized')
