@@ -32,6 +32,7 @@ import {
   initDB,
   exportDatabase,
   restoreDatabase,
+  type RestoreOutcome,
   type Tag,
 } from '@/lib/db'
 import { formatPeriod } from '@/lib/nudge'
@@ -82,6 +83,7 @@ function Settings() {
   const [pendingRestore, setPendingRestore] = useState<File | null>(null)
   const [isRestoring, setIsRestoring] = useState(false)
   const [dataError, setDataError] = useState<string | null>(null)
+  const [dataNotice, setDataNotice] = useState<string | null>(null)
   const restoreInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -126,6 +128,7 @@ function Settings() {
 
   const handleExport = async () => {
     setDataError(null)
+    setDataNotice(null)
     try {
       downloadBytes(await exportDatabase(), backupFilename(new Date()))
     } catch (error) {
@@ -137,27 +140,37 @@ function Settings() {
     const file = event.target.files?.[0] ?? null
     event.target.value = ''
     setDataError(null)
+    setDataNotice(null)
     setPendingRestore(file)
   }
 
   const handleRestoreConfirmed = async () => {
     if (!pendingRestore) return
     setIsRestoring(true)
+    let outcome: RestoreOutcome
     try {
       const bytes = new Uint8Array(await pendingRestore.arrayBuffer())
-      const outcome = await restoreDatabase(bytes, (currentBytes) =>
-        downloadBytes(currentBytes, backupFilename(new Date()))
+      outcome = await restoreDatabase(bytes, (currentBytes) =>
+        downloadBytes(currentBytes, backupFilename(new Date(), 'before-restore'))
       )
-      await queryClient.invalidateQueries()
-      if (isNotificationEnabled()) await scheduleNotification()
-      if (outcome.resaveError) {
-        setDataError('Restore applied, but saving it may not have completed. Export a backup to be safe.')
-      }
     } catch (error) {
       setDataError(error instanceof Error ? error.message : 'Restore failed')
+      return
+    } finally {
+      setIsRestoring(false)
+      setPendingRestore(null)
     }
-    setIsRestoring(false)
-    setPendingRestore(null)
+    // The data is already replaced, so a failure from here on is not a failed restore
+    setDataNotice(`Restored from ${pendingRestore.name}`)
+    if (outcome.resaveError) {
+      setDataError('Restore applied, but saving it may not have completed. Export a backup to be safe.')
+    }
+    try {
+      await queryClient.invalidateQueries()
+      if (isNotificationEnabled()) await scheduleNotification()
+    } catch {
+      setDataError('Restore applied, but the screen may be out of date. Reload the app.')
+    }
   }
 
   return (
@@ -349,10 +362,12 @@ function Settings() {
             <input
               ref={restoreInputRef}
               type="file"
+              accept=".sqlite,application/x-sqlite3,application/vnd.sqlite3"
               className="hidden"
               onChange={handleRestoreFileChosen}
             />
           </div>
+          {dataNotice && <p className="text-sm text-muted-foreground">{dataNotice}</p>}
           {dataError && (
             <p role="alert" className="text-sm text-destructive">
               {dataError}
@@ -371,7 +386,8 @@ function Settings() {
           </DialogHeader>
           <p className="text-muted-foreground">
             This replaces all current contacts, tags and check-ins with the contents of the file.
-            A backup of your current data downloads first.
+            A copy of your current data is kept on this device, and a backup file is offered as a
+            download first.
           </p>
           <div className="flex gap-2 mt-4">
             <Button

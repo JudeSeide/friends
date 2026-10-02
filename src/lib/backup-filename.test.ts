@@ -9,3 +9,7 @@ test('backupFilename names the file after the local date', () => {
 test('backupFilename zero-pads month and day', () => {
   assert.equal(backupFilename(new Date(2026, 0, 5)), 'friends-backup-2026-01-05.sqlite')
 })
+
+test('backupFilename names the pre-restore copy distinctly', () => {
+  assert.equal(backupFilename(new Date(2026, 9, 2), 'before-restore'), 'friends-before-restore-2026-10-02.sqlite')
+})
