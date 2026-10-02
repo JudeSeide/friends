@@ -138,15 +138,20 @@ for (const missing of TABLES) {
   })
 }
 
-test('validateBackup rejects a file whose tables lack the expected columns', async () => {
-  const SQL = await initSqlJs()
-  const wrong = new SQL.Database()
-  wrong.run(
-    'CREATE TABLE tags (id TEXT); CREATE TABLE contacts (id TEXT); CREATE TABLE checkins (id TEXT); CREATE TABLE settings (key TEXT, value TEXT);'
-  )
+for (const table of TABLES) {
+  test(`validateBackup rejects a valid export whose ${table} table lacks a column`, async () => {
+    const SQL = await initSqlJs()
+    const source = await createTestDb()
+    const columns = source.exec(`PRAGMA table_info(${table})`)[0].values.map((row) => row[1] as string)
+    source.run(`ALTER TABLE ${table} DROP COLUMN ${columns[columns.length - 1]}`)
 
-  assert.throws(() => validateBackup(SQL, wrong.export()), /tags has columns/)
-})
+    assert.throws(
+      () => validateBackup(SQL, source.export()),
+      (error: unknown) =>
+        error instanceof InvalidBackupError && error.message.startsWith(`Not a Friends backup: ${table} has columns`)
+    )
+  })
+}
 
 test('validateBackup rejects a table with an extra column', async () => {
   const SQL = await initSqlJs()
