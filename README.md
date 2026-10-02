@@ -73,3 +73,12 @@ Open http://localhost:5173
 ## Data Storage
 
 All data stored locally in browser IndexedDB. Nothing sent to any server.
+
+### Backup and restore
+
+Settings > Data has two actions:
+
+- **Export data** downloads the whole database as `friends-backup-YYYY-MM-DD.sqlite`.
+- **Restore** replaces all current data with a file exported earlier. It asks for confirmation,
+  downloads a backup of the current data first, then swaps in the file. A file that is not a
+  Friends export is rejected and nothing changes.
