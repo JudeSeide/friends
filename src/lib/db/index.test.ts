@@ -320,3 +320,23 @@ test('commitRestore saves before the swap, saves again after it, and closes the 
   assert.throws(() => current.exec('SELECT 1'))
   assert.deepEqual(dumpTables(restored), expected)
 })
+
+test('validateBackup rejects a file that quick_check reports problems for without throwing', async () => {
+  const SQL = await initSqlJs()
+  const source = await createTestDb()
+  seedFullDb(source)
+  const exported = source.export()
+  const view = new DataView(exported.buffer, exported.byteOffset, exported.byteLength)
+  const rawPageSize = view.getUint16(16)
+  const pageSize = rawPageSize === 1 ? 65536 : rawPageSize
+  const bytes = new Uint8Array(exported.length + pageSize)
+  bytes.set(exported)
+  new DataView(bytes.buffer).setUint32(28, view.getUint32(28) + 1)
+
+  const probe = new SQL.Database(bytes)
+  const rows = probe.exec('PRAGMA quick_check')[0].values
+  probe.close()
+  assert.notDeepEqual(rows, [['ok']], 'fixture must make quick_check return problem rows')
+
+  assert.throws(() => validateBackup(SQL, bytes), /damaged/)
+})
