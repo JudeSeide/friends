@@ -75,7 +75,7 @@ async function loadFromIndexedDB(): Promise<Uint8Array | null> {
   })
 }
 
-async function saveToIndexedDB(data: Uint8Array): Promise<void> {
+async function saveToIndexedDB(data: Uint8Array, key = 'data'): Promise<void> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, 1)
     request.onupgradeneeded = () => {
@@ -84,7 +84,7 @@ async function saveToIndexedDB(data: Uint8Array): Promise<void> {
     request.onsuccess = () => {
       const tx = request.result.transaction('db', 'readwrite')
       const store = tx.objectStore('db')
-      store.put(data, 'data')
+      store.put(data, key)
       tx.oncomplete = () => resolve()
       tx.onerror = () => reject(tx.error)
       tx.onabort = () => reject(tx.error ?? new Error('IndexedDB write aborted'))
@@ -124,6 +124,8 @@ const REQUIRED_TABLES = ['tags', 'contacts', 'checkins', 'settings']
 
 export type BackupSink = (currentBytes: Uint8Array) => void | Promise<void>
 
+export type RestoreOutcome = { resaveError: Error | null }
+
 export class InvalidBackupError extends Error {
   constructor(message: string) {
     super(message)
@@ -137,15 +139,14 @@ function tableColumns(database: Database, table: string): string[] {
 }
 
 function assertIntact(database: Database): void {
-  let rows: SqlValue[][] = []
+  let intact = false
   try {
-    rows = database.exec('PRAGMA quick_check')[0]?.values ?? []
+    const rows = database.exec('PRAGMA quick_check')[0]?.values ?? []
+    intact = rows.length === 1 && rows[0][0] === 'ok'
   } catch {
-    throw new InvalidBackupError('The backup file is damaged')
+    // An unreadable page throws instead of returning problem rows
   }
-  if (rows.length !== 1 || rows[0][0] !== 'ok') {
-    throw new InvalidBackupError('The backup file is damaged')
-  }
+  if (!intact) throw new InvalidBackupError('The file is damaged')
 }
 
 // Queries read rows by position (SELECT * and c.*), so each table must have exactly SCHEMA's
@@ -156,10 +157,10 @@ function assertColumns(SQL: SqlJsStatic, database: Database): void {
     reference.run(SCHEMA)
     for (const table of REQUIRED_TABLES) {
       const expected = tableColumns(reference, table)
-      const present = tableColumns(database, table)
-      if (present.join(',') !== expected.join(',')) {
+      const presentColumns = tableColumns(database, table)
+      if (presentColumns.join(',') !== expected.join(',')) {
         throw new InvalidBackupError(
-          `Not a Friends backup: ${table} has columns (${present.join(', ')}), expected (${expected.join(', ')})`
+          `The file is not a Friends backup: ${table} has columns (${presentColumns.join(', ')}), expected (${expected.join(', ')})`
         )
       }
     }
@@ -175,10 +176,10 @@ export function validateBackup(SQL: SqlJsStatic, bytes: Uint8Array): void {
   try {
     scratch = new SQL.Database(bytes)
     const result = scratch.exec("SELECT name FROM sqlite_master WHERE type = 'table'")
-    const present = new Set((result[0]?.values ?? []).map((row) => row[0]))
-    const missing = REQUIRED_TABLES.filter((table) => !present.has(table))
+    const presentTables = new Set((result[0]?.values ?? []).map((row) => row[0]))
+    const missing = REQUIRED_TABLES.filter((table) => !presentTables.has(table))
     if (missing.length > 0) {
-      throw new InvalidBackupError(`Not a Friends backup: missing ${missing.join(', ')}`)
+      throw new InvalidBackupError(`The file is not a Friends backup: missing ${missing.join(', ')}`)
     }
     assertIntact(scratch)
     assertColumns(SQL, scratch)
@@ -213,8 +214,6 @@ export async function exportDatabase(): Promise<Uint8Array> {
 // restored data is saved once more, superseding any write the old database queued meanwhile.
 // Once the swap happened the restore has succeeded: a failure of that second save is returned
 // as resaveError instead of rejecting, so the caller can still refresh and warn.
-export type RestoreOutcome = { resaveError: Error | null }
-
 export async function commitRestore(
   current: Database,
   restored: Database,
@@ -238,14 +237,41 @@ export async function commitRestore(
   return { resaveError: null }
 }
 
+// The caller's sink can't confirm a download landed, so the current data is first stored on the
+// device under its own key. A failed store aborts the restore before anything is replaced.
+export function keepCopyThen(store: BackupSink, backup: BackupSink): BackupSink {
+  return async (currentBytes) => {
+    await store(currentBytes)
+    await backup(currentBytes)
+  }
+}
+
+let restoreChannel: BroadcastChannel | null = null
+
+// Every tab persists its whole database, so another open tab would write the old data back
+function getRestoreChannel(): BroadcastChannel {
+  restoreChannel ??= new BroadcastChannel(DB_NAME)
+  return restoreChannel
+}
+
+export function onRestoreElsewhere(handler: () => void): void {
+  getRestoreChannel().onmessage = (event) => {
+    if (event.data === 'restored') handler()
+  }
+}
+
 export async function restoreDatabase(bytes: Uint8Array, backup: BackupSink): Promise<RestoreOutcome> {
   const current = await initDB()
+  // Never fires: initDB sets sqlModule before db. Narrows the type for prepareRestore
   if (!sqlModule) throw new Error('Database not initialized')
 
-  const restored = await prepareRestore(sqlModule, current, bytes, backup)
-  return commitRestore(current, restored, saveToIndexedDB, (database) => {
+  const keepCopy = (currentBytes: Uint8Array) => saveToIndexedDB(currentBytes, 'pre-restore')
+  const restored = await prepareRestore(sqlModule, current, bytes, keepCopyThen(keepCopy, backup))
+  const outcome = await commitRestore(current, restored, saveToIndexedDB, (database) => {
     db = database
   })
+  getRestoreChannel().postMessage('restored')
+  return outcome
 }
 
 function seedDefaultTags(): void {

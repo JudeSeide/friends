@@ -1,7 +1,15 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import initSqlJs, { type Database } from 'sql.js'
-import { SCHEMA, insertCheckin, validateBackup, prepareRestore, commitRestore, InvalidBackupError } from './index.ts'
+import {
+  SCHEMA,
+  insertCheckin,
+  validateBackup,
+  prepareRestore,
+  commitRestore,
+  keepCopyThen,
+  InvalidBackupError,
+} from './index.ts'
 
 async function createTestDb(): Promise<Database> {
   const SQL = await initSqlJs()
@@ -75,6 +83,7 @@ test('insertCheckin sets last_checkin_at on a contact with no prior check-in', a
   assert.equal(readLastCheckinAt(database, contactId), today)
 })
 
+// Listed independently of REQUIRED_TABLES so the tests pin the backup contract
 const TABLES = ['tags', 'contacts', 'checkins', 'settings']
 
 function seedFullDb(database: Database): void {
@@ -133,7 +142,7 @@ for (const missing of TABLES) {
     assert.throws(
       () => validateBackup(SQL, partial.export()),
       (error: unknown) =>
-        error instanceof InvalidBackupError && error.message === `Not a Friends backup: missing ${missing}`
+        error instanceof InvalidBackupError && error.message === `The file is not a Friends backup: missing ${missing}`
     )
   })
 }
@@ -148,7 +157,7 @@ for (const table of TABLES) {
     assert.throws(
       () => validateBackup(SQL, source.export()),
       (error: unknown) =>
-        error instanceof InvalidBackupError && error.message.startsWith(`Not a Friends backup: ${table} has columns`)
+        error instanceof InvalidBackupError && error.message.startsWith(`The file is not a Friends backup: ${table} has columns`)
     )
   })
 }
@@ -184,6 +193,26 @@ test('validateBackup rejects a file with corrupt data pages', async () => {
   const pageSize = new DataView(bytes.buffer, bytes.byteOffset).getUint16(16)
   assert.ok(bytes.length > pageSize * 4, 'fixture must span several pages')
   bytes.fill(0xff, pageSize * 2)
+
+  assert.throws(() => validateBackup(SQL, bytes), /damaged/)
+})
+
+test('validateBackup rejects a file that quick_check reports problems for without throwing', async () => {
+  const SQL = await initSqlJs()
+  const source = await createTestDb()
+  seedFullDb(source)
+  const exported = source.export()
+  const view = new DataView(exported.buffer, exported.byteOffset, exported.byteLength)
+  const rawPageSize = view.getUint16(16)
+  const pageSize = rawPageSize === 1 ? 65536 : rawPageSize
+  const bytes = new Uint8Array(exported.length + pageSize)
+  bytes.set(exported)
+  new DataView(bytes.buffer).setUint32(28, view.getUint32(28) + 1)
+
+  const probe = new SQL.Database(bytes)
+  const rows = probe.exec('PRAGMA quick_check')[0].values
+  probe.close()
+  assert.notDeepEqual(rows, [['ok']], 'fixture must make quick_check return problem rows')
 
   assert.throws(() => validateBackup(SQL, bytes), /damaged/)
 })
@@ -293,6 +322,7 @@ test('commitRestore keeps the current database live and closes the replacement w
 })
 
 test('commitRestore saves before the swap, saves again after it, and closes the old database', async () => {
+  const SQL = await initSqlJs()
   const current = await createTestDb()
   const restored = await createTestDb()
   seedFullDb(restored)
@@ -307,7 +337,7 @@ test('commitRestore saves before the swap, saves again after it, and closes the 
       events.push('save-start')
       await new Promise((resolve) => setTimeout(resolve, 5))
       events.push('save-end')
-      assert.deepEqual(dumpTables(new (await initSqlJs()).Database(bytes)), expected)
+      assert.deepEqual(dumpTables(new SQL.Database(bytes)), expected)
     },
     (database) => {
       events.push('activate')
@@ -320,26 +350,6 @@ test('commitRestore saves before the swap, saves again after it, and closes the 
   assert.equal(live, restored)
   assert.throws(() => current.exec('SELECT 1'))
   assert.deepEqual(dumpTables(restored), expected)
-})
-
-test('validateBackup rejects a file that quick_check reports problems for without throwing', async () => {
-  const SQL = await initSqlJs()
-  const source = await createTestDb()
-  seedFullDb(source)
-  const exported = source.export()
-  const view = new DataView(exported.buffer, exported.byteOffset, exported.byteLength)
-  const rawPageSize = view.getUint16(16)
-  const pageSize = rawPageSize === 1 ? 65536 : rawPageSize
-  const bytes = new Uint8Array(exported.length + pageSize)
-  bytes.set(exported)
-  new DataView(bytes.buffer).setUint32(28, view.getUint32(28) + 1)
-
-  const probe = new SQL.Database(bytes)
-  const rows = probe.exec('PRAGMA quick_check')[0].values
-  probe.close()
-  assert.notDeepEqual(rows, [['ok']], 'fixture must make quick_check return problem rows')
-
-  assert.throws(() => validateBackup(SQL, bytes), /damaged/)
 })
 
 test('commitRestore reports a failed second save without rejecting, after the swap happened', async () => {
@@ -363,4 +373,85 @@ test('commitRestore reports a failed second save without rejecting, after the sw
   assert.equal(live, restored)
   assert.throws(() => current.exec('SELECT 1'))
   assert.equal(outcome.resaveError?.message, 'second write failed')
+})
+
+test('commitRestore leaves the restored data stored when an old-database write lands after the first save', async () => {
+  const SQL = await initSqlJs()
+  const current = await createTestDb()
+  seedFullDb(current)
+  const restored = await createTestDb()
+  const expected = dumpTables(restored)
+  const writes: Uint8Array[] = []
+
+  await commitRestore(
+    current,
+    restored,
+    async (bytes) => {
+      writes.push(bytes)
+      // The old database's persist(), queued during the first save, lands after it
+      if (writes.length === 1) writes.push(current.export())
+    },
+    () => {}
+  )
+
+  assert.deepEqual(dumpTables(new SQL.Database(writes[writes.length - 1])), expected)
+})
+
+test('keepCopyThen stores the current data before the restore, even when the backup sink does nothing', async () => {
+  const SQL = await initSqlJs()
+  const current = await createTestDb()
+  seedFullDb(current)
+  const before = dumpTables(current)
+  const incoming = await createTestDb()
+  const events: string[] = []
+  let kept: Uint8Array | null = null
+
+  const restored = await prepareRestore(
+    SQL,
+    current,
+    incoming.export(),
+    keepCopyThen(
+      async (bytes) => {
+        events.push('keep')
+        kept = bytes
+      },
+      () => {}
+    )
+  )
+  await commitRestore(
+    current,
+    restored,
+    async () => {
+      events.push('save')
+    },
+    () => {}
+  )
+
+  assert.deepEqual(events, ['keep', 'save', 'save'])
+  assert.ok(kept)
+  assert.deepEqual(dumpTables(new SQL.Database(kept)), before)
+})
+
+test('keepCopyThen aborts the restore without calling the backup sink when the store fails', async () => {
+  const SQL = await initSqlJs()
+  const current = await createTestDb()
+  const incoming = await createTestDb()
+  let backups = 0
+
+  await assert.rejects(
+    prepareRestore(
+      SQL,
+      current,
+      incoming.export(),
+      keepCopyThen(
+        () => Promise.reject(new Error('quota exceeded')),
+        () => {
+          backups += 1
+        }
+      )
+    ),
+    /quota exceeded/
+  )
+
+  assert.equal(backups, 0)
 })
