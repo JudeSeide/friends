@@ -149,6 +149,7 @@ function Settings() {
         downloadBytes(currentBytes, backupFilename(new Date()))
       )
       await queryClient.invalidateQueries()
+      if (isNotificationEnabled()) await scheduleNotification()
     } catch (error) {
       setDataError(error instanceof Error ? error.message : 'Restore failed')
     }
