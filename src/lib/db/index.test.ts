@@ -145,15 +145,28 @@ test('validateBackup rejects a file whose tables lack the expected columns', asy
     'CREATE TABLE tags (id TEXT); CREATE TABLE contacts (id TEXT); CREATE TABLE checkins (id TEXT); CREATE TABLE settings (key TEXT, value TEXT);'
   )
 
-  assert.throws(() => validateBackup(SQL, wrong.export()), /tags is missing/)
+  assert.throws(() => validateBackup(SQL, wrong.export()), /tags has columns/)
 })
 
-test('validateBackup accepts a table with extra columns', async () => {
+test('validateBackup rejects a table with an extra column', async () => {
   const SQL = await initSqlJs()
   const source = await createTestDb()
   source.run('ALTER TABLE contacts ADD COLUMN nickname TEXT')
 
-  assert.doesNotThrow(() => validateBackup(SQL, source.export()))
+  assert.throws(() => validateBackup(SQL, source.export()), /contacts has columns/)
+})
+
+test('validateBackup rejects a table whose columns are reordered', async () => {
+  const SQL = await initSqlJs()
+  const swapped = SCHEMA.replace(
+    'id TEXT PRIMARY KEY,\n  name TEXT NOT NULL UNIQUE,',
+    'name TEXT NOT NULL UNIQUE,\n  id TEXT PRIMARY KEY,'
+  )
+  assert.notEqual(swapped, SCHEMA)
+  const reordered = new SQL.Database()
+  reordered.run(swapped)
+
+  assert.throws(() => validateBackup(SQL, reordered.export()), /tags has columns/)
 })
 
 test('validateBackup rejects a file with corrupt data pages', async () => {

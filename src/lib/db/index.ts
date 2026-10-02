@@ -131,9 +131,9 @@ export class InvalidBackupError extends Error {
   }
 }
 
-function tableColumns(database: Database, table: string): Set<string> {
+function tableColumns(database: Database, table: string): string[] {
   const result = database.exec(`PRAGMA table_info(${table})`)
-  return new Set((result[0]?.values ?? []).map((row) => row[1] as string))
+  return (result[0]?.values ?? []).map((row) => row[1] as string)
 }
 
 function assertIntact(database: Database): void {
@@ -148,16 +148,19 @@ function assertIntact(database: Database): void {
   }
 }
 
-// Every column SCHEMA defines must exist; extra columns are allowed so an additive schema restores
+// Queries read rows by position (SELECT * and c.*), so each table must have exactly SCHEMA's
+// columns in SCHEMA's order
 function assertColumns(SQL: SqlJsStatic, database: Database): void {
   const reference = new SQL.Database()
   try {
     reference.run(SCHEMA)
     for (const table of REQUIRED_TABLES) {
+      const expected = tableColumns(reference, table)
       const present = tableColumns(database, table)
-      const missing = [...tableColumns(reference, table)].filter((column) => !present.has(column))
-      if (missing.length > 0) {
-        throw new InvalidBackupError(`Not a Friends backup: ${table} is missing ${missing.join(', ')}`)
+      if (present.join(',') !== expected.join(',')) {
+        throw new InvalidBackupError(
+          `Not a Friends backup: ${table} has columns (${present.join(', ')}), expected (${expected.join(', ')})`
+        )
       }
     }
   } finally {
