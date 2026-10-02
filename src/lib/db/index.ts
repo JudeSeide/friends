@@ -1,7 +1,8 @@
-import initSqlJs, { type Database, type SqlValue } from 'sql.js'
+import initSqlJs, { type Database, type SqlJsStatic, type SqlValue } from 'sql.js'
 import type { Tag, Contact, Checkin, ContactWithTag, SettingKey } from './types'
 
 let db: Database | null = null
+let sqlModule: SqlJsStatic | null = null
 const DB_NAME = 'friends_db'
 
 export const SCHEMA = `
@@ -97,6 +98,7 @@ export async function initDB(): Promise<Database> {
   const SQL = await initSqlJs({
     locateFile: (file: string) => `/${file}`
   })
+  sqlModule = SQL
 
   const savedData = await loadFromIndexedDB()
 
@@ -115,6 +117,71 @@ export async function persist(): Promise<void> {
   if (!db) return
   const data = db.export()
   await saveToIndexedDB(data)
+}
+
+const REQUIRED_TABLES = ['tags', 'contacts', 'checkins', 'settings']
+
+export class InvalidBackupError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'InvalidBackupError'
+  }
+}
+
+export function validateBackup(SQL: SqlJsStatic, bytes: Uint8Array): void {
+  if (bytes.length === 0) throw new InvalidBackupError('The file is empty')
+
+  let scratch: Database | null = null
+  try {
+    scratch = new SQL.Database(bytes)
+    const result = scratch.exec("SELECT name FROM sqlite_master WHERE type = 'table'")
+    const present = new Set((result[0]?.values ?? []).map((row) => row[0]))
+    const missing = REQUIRED_TABLES.filter((table) => !present.has(table))
+    if (missing.length > 0) {
+      throw new InvalidBackupError(`Not a Friends backup: missing ${missing.join(', ')}`)
+    }
+  } catch (error) {
+    if (error instanceof InvalidBackupError) throw error
+    throw new InvalidBackupError('The file is not a SQLite database')
+  } finally {
+    scratch?.close()
+  }
+}
+
+// Does not persist or touch the module database; validates, hands the backup callback the
+// current data, then returns the replacement. The caller swaps and persists it.
+export async function prepareRestore(
+  SQL: SqlJsStatic,
+  current: Database,
+  bytes: Uint8Array,
+  backup: (currentBytes: Uint8Array) => void | Promise<void>
+): Promise<Database> {
+  validateBackup(SQL, bytes)
+  await backup(current.export())
+  return new SQL.Database(bytes)
+}
+
+export async function exportDatabase(): Promise<Uint8Array> {
+  const database = await initDB()
+  return database.export()
+}
+
+export async function restoreDatabase(
+  bytes: Uint8Array,
+  backup: (currentBytes: Uint8Array) => void | Promise<void>
+): Promise<void> {
+  const current = await initDB()
+  if (!sqlModule) throw new Error('Database not initialized')
+
+  const restored = await prepareRestore(sqlModule, current, bytes, backup)
+  try {
+    await saveToIndexedDB(restored.export())
+  } catch (error) {
+    restored.close()
+    throw error
+  }
+  db = restored
+  current.close()
 }
 
 function seedDefaultTags(): void {
