@@ -125,6 +125,38 @@ test('validateBackup rejects a SQLite file missing a required table', async () =
   assert.throws(() => validateBackup(SQL, partial.export()), InvalidBackupError)
 })
 
+test('validateBackup rejects a file whose tables lack the expected columns', async () => {
+  const SQL = await initSqlJs()
+  const wrong = new SQL.Database()
+  wrong.run(
+    'CREATE TABLE tags (id TEXT); CREATE TABLE contacts (id TEXT); CREATE TABLE checkins (id TEXT); CREATE TABLE settings (key TEXT, value TEXT);'
+  )
+
+  assert.throws(() => validateBackup(SQL, wrong.export()), /tags is missing/)
+})
+
+test('validateBackup accepts a table with extra columns', async () => {
+  const SQL = await initSqlJs()
+  const source = await createTestDb()
+  source.run('ALTER TABLE contacts ADD COLUMN nickname TEXT')
+
+  assert.doesNotThrow(() => validateBackup(SQL, source.export()))
+})
+
+test('validateBackup rejects a file with corrupt data pages', async () => {
+  const SQL = await initSqlJs()
+  const source = await createTestDb()
+  for (let i = 0; i < 400; i += 1) {
+    source.run('INSERT INTO settings (key, value) VALUES (?, ?)', [`key-${i}`, 'x'.repeat(200)])
+  }
+  const bytes = source.export()
+  const pageSize = new DataView(bytes.buffer, bytes.byteOffset).getUint16(16)
+  assert.ok(bytes.length > pageSize * 4, 'fixture must span several pages')
+  bytes.fill(0xff, pageSize * 2)
+
+  assert.throws(() => validateBackup(SQL, bytes), /damaged/)
+})
+
 test('an exported database restores every row of every table', async () => {
   const SQL = await initSqlJs()
   const source = await createTestDb()

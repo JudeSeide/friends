@@ -128,6 +128,40 @@ export class InvalidBackupError extends Error {
   }
 }
 
+function tableColumns(database: Database, table: string): Set<string> {
+  const result = database.exec(`PRAGMA table_info(${table})`)
+  return new Set((result[0]?.values ?? []).map((row) => row[1] as string))
+}
+
+function assertIntact(database: Database): void {
+  let rows: SqlValue[][] = []
+  try {
+    rows = database.exec('PRAGMA quick_check')[0]?.values ?? []
+  } catch {
+    throw new InvalidBackupError('The backup file is damaged')
+  }
+  if (rows.length !== 1 || rows[0][0] !== 'ok') {
+    throw new InvalidBackupError('The backup file is damaged')
+  }
+}
+
+// Every column SCHEMA defines must exist; extra columns are allowed so an additive schema restores
+function assertColumns(SQL: SqlJsStatic, database: Database): void {
+  const reference = new SQL.Database()
+  try {
+    reference.run(SCHEMA)
+    for (const table of REQUIRED_TABLES) {
+      const present = tableColumns(database, table)
+      const missing = [...tableColumns(reference, table)].filter((column) => !present.has(column))
+      if (missing.length > 0) {
+        throw new InvalidBackupError(`Not a Friends backup: ${table} is missing ${missing.join(', ')}`)
+      }
+    }
+  } finally {
+    reference.close()
+  }
+}
+
 export function validateBackup(SQL: SqlJsStatic, bytes: Uint8Array): void {
   if (bytes.length === 0) throw new InvalidBackupError('The file is empty')
 
@@ -140,6 +174,8 @@ export function validateBackup(SQL: SqlJsStatic, bytes: Uint8Array): void {
     if (missing.length > 0) {
       throw new InvalidBackupError(`Not a Friends backup: missing ${missing.join(', ')}`)
     }
+    assertIntact(scratch)
+    assertColumns(SQL, scratch)
   } catch (error) {
     if (error instanceof InvalidBackupError) throw error
     throw new InvalidBackupError('The file is not a SQLite database')
