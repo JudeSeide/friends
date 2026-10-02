@@ -150,10 +150,9 @@ function Settings() {
       await queryClient.invalidateQueries()
     } catch (error) {
       setDataError(error instanceof Error ? error.message : 'Restore failed')
-    } finally {
-      setIsRestoring(false)
-      setPendingRestore(null)
     }
+    setIsRestoring(false)
+    setPendingRestore(null)
   }
 
   return (
