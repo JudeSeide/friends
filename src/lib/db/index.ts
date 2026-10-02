@@ -204,22 +204,32 @@ export async function exportDatabase(): Promise<Uint8Array> {
   return database.export()
 }
 
-export async function restoreDatabase(
-  bytes: Uint8Array,
-  backup: BackupSink
+// Writes the restored data to storage before it becomes the live database. A failed write
+// closes the replacement and leaves the current database open and live.
+export async function commitRestore(
+  current: Database,
+  restored: Database,
+  save: (bytes: Uint8Array) => Promise<void>,
+  activate: (database: Database) => void
 ): Promise<void> {
-  const current = await initDB()
-  if (!sqlModule) throw new Error('Database not initialized')
-
-  const restored = await prepareRestore(sqlModule, current, bytes, backup)
   try {
-    await saveToIndexedDB(restored.export())
+    await save(restored.export())
   } catch (error) {
     restored.close()
     throw error
   }
-  db = restored
+  activate(restored)
   current.close()
+}
+
+export async function restoreDatabase(bytes: Uint8Array, backup: BackupSink): Promise<void> {
+  const current = await initDB()
+  if (!sqlModule) throw new Error('Database not initialized')
+
+  const restored = await prepareRestore(sqlModule, current, bytes, backup)
+  await commitRestore(current, restored, saveToIndexedDB, (database) => {
+    db = database
+  })
 }
 
 function seedDefaultTags(): void {

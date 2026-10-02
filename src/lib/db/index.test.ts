@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import initSqlJs, { type Database } from 'sql.js'
-import { SCHEMA, insertCheckin, validateBackup, prepareRestore, InvalidBackupError } from './index.ts'
+import { SCHEMA, insertCheckin, validateBackup, prepareRestore, commitRestore, InvalidBackupError } from './index.ts'
 
 async function createTestDb(): Promise<Database> {
   const SQL = await initSqlJs()
@@ -246,4 +246,57 @@ test('prepareRestore waits for an async backup and rejects when it fails after a
   )
 
   assert.equal(replacement, null)
+})
+
+test('commitRestore keeps the current database live and closes the replacement when the save fails', async () => {
+  const current = await createTestDb()
+  seedFullDb(current)
+  const before = dumpTables(current)
+  const restored = await createTestDb()
+  let activated = false
+
+  await assert.rejects(
+    commitRestore(
+      current,
+      restored,
+      () => Promise.reject(new Error('quota exceeded')),
+      () => {
+        activated = true
+      }
+    ),
+    /quota exceeded/
+  )
+
+  assert.equal(activated, false)
+  assert.throws(() => restored.exec('SELECT 1'))
+  assert.deepEqual(dumpTables(current), before)
+})
+
+test('commitRestore finishes the save before the swap and closes the old database', async () => {
+  const current = await createTestDb()
+  const restored = await createTestDb()
+  seedFullDb(restored)
+  const expected = dumpTables(restored)
+  const events: string[] = []
+  let live: Database | null = null
+
+  await commitRestore(
+    current,
+    restored,
+    async (bytes) => {
+      events.push('save-start')
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      events.push('save-end')
+      assert.deepEqual(dumpTables(new (await initSqlJs()).Database(bytes)), expected)
+    },
+    (database) => {
+      events.push('activate')
+      live = database
+    }
+  )
+
+  assert.deepEqual(events, ['save-start', 'save-end', 'activate'])
+  assert.equal(live, restored)
+  assert.throws(() => current.exec('SELECT 1'))
+  assert.deepEqual(dumpTables(restored), expected)
 })
