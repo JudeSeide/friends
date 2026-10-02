@@ -228,3 +228,22 @@ test('prepareRestore aborts when the backup fails', async () => {
 
   assert.deepEqual(dumpTables(current), before)
 })
+
+test('prepareRestore waits for an async backup and rejects when it fails after an await', async () => {
+  const SQL = await initSqlJs()
+  const current = await createTestDb()
+  const incoming = await createTestDb()
+  let replacement: Database | null = null
+
+  await assert.rejects(
+    (async () => {
+      replacement = await prepareRestore(SQL, current, incoming.export(), async () => {
+        await Promise.resolve()
+        throw new Error('download failed late')
+      })
+    })(),
+    /download failed late/
+  )
+
+  assert.equal(replacement, null)
+})
