@@ -205,7 +205,8 @@ export async function exportDatabase(): Promise<Uint8Array> {
 }
 
 // Writes the restored data to storage before it becomes the live database. A failed write
-// closes the replacement and leaves the current database open and live.
+// closes the replacement and leaves the current database open and live. After the swap the
+// restored data is saved once more, superseding any write the old database queued meanwhile.
 export async function commitRestore(
   current: Database,
   restored: Database,
@@ -220,6 +221,8 @@ export async function commitRestore(
   }
   activate(restored)
   current.close()
+  // A write queued on the old database during the first save would otherwise land last
+  await save(restored.export())
 }
 
 export async function restoreDatabase(bytes: Uint8Array, backup: BackupSink): Promise<void> {

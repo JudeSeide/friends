@@ -272,7 +272,7 @@ test('commitRestore keeps the current database live and closes the replacement w
   assert.deepEqual(dumpTables(current), before)
 })
 
-test('commitRestore finishes the save before the swap and closes the old database', async () => {
+test('commitRestore saves before the swap, saves again after it, and closes the old database', async () => {
   const current = await createTestDb()
   const restored = await createTestDb()
   seedFullDb(restored)
@@ -295,7 +295,7 @@ test('commitRestore finishes the save before the swap and closes the old databas
     }
   )
 
-  assert.deepEqual(events, ['save-start', 'save-end', 'activate'])
+  assert.deepEqual(events, ['save-start', 'save-end', 'activate', 'save-start', 'save-end'])
   assert.equal(live, restored)
   assert.throws(() => current.exec('SELECT 1'))
   assert.deepEqual(dumpTables(restored), expected)
