@@ -117,13 +117,20 @@ test('validateBackup rejects empty bytes', async () => {
   assert.throws(() => validateBackup(SQL, new Uint8Array()), InvalidBackupError)
 })
 
-test('validateBackup rejects a SQLite file missing a required table', async () => {
-  const SQL = await initSqlJs()
-  const partial = new SQL.Database()
-  partial.run('CREATE TABLE tags (id TEXT PRIMARY KEY); CREATE TABLE contacts (id TEXT PRIMARY KEY);')
+for (const missing of TABLES) {
+  test(`validateBackup rejects a SQLite file missing the ${missing} table`, async () => {
+    const SQL = await initSqlJs()
+    const partial = new SQL.Database()
+    partial.run(SCHEMA)
+    partial.run(`DROP TABLE ${missing}`)
 
-  assert.throws(() => validateBackup(SQL, partial.export()), InvalidBackupError)
-})
+    assert.throws(
+      () => validateBackup(SQL, partial.export()),
+      (error: unknown) =>
+        error instanceof InvalidBackupError && error.message === `Not a Friends backup: missing ${missing}`
+    )
+  })
+}
 
 test('validateBackup rejects a file whose tables lack the expected columns', async () => {
   const SQL = await initSqlJs()
