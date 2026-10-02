@@ -4,6 +4,7 @@ import { registerSW } from 'virtual:pwa-register'
 import './index.css'
 import App from './App.tsx'
 import { initNotifications } from './lib/notifications'
+import { onRestoreElsewhere } from './lib/db'
 
 // Register service worker
 const updateSW = registerSW({
@@ -16,6 +17,9 @@ const updateSW = registerSW({
     console.log('App ready to work offline')
   },
 })
+
+// Another tab replaced the stored data; reload before this tab writes the old data back
+onRestoreElsewhere(() => location.reload())
 
 // Initialize notifications when app loads
 initNotifications().catch(console.error)

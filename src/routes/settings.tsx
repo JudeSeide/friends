@@ -1,7 +1,7 @@
 import { createRoute } from '@tanstack/react-router'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Route as rootRoute } from './__root'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, type ChangeEvent } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -21,7 +21,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
-import { Plus, Pencil, Trash2, Bell, Check } from 'lucide-react'
+import { Plus, Pencil, Trash2, Bell, Check, Download, Upload } from 'lucide-react'
 import {
   getTags,
   createTag,
@@ -30,9 +30,13 @@ import {
   getSetting,
   setSetting,
   initDB,
+  exportDatabase,
+  restoreDatabase,
+  type RestoreOutcome,
   type Tag,
 } from '@/lib/db'
 import { formatPeriod } from '@/lib/nudge'
+import { backupFilename } from '@/lib/backup-filename'
 import { getTagDeleteInvalidationKeys } from '@/lib/query-keys'
 import {
   requestNotificationPermission,
@@ -58,12 +62,29 @@ const PERIODS = [
   { value: 30, label: 'Monthly' },
 ]
 
+function downloadBytes(bytes: Uint8Array, filename: string): void {
+  const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: 'application/x-sqlite3' }))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  // Revoking in the same tick can cancel the download on Safari
+  setTimeout(() => URL.revokeObjectURL(url), 10_000)
+}
+
 function Settings() {
   const queryClient = useQueryClient()
   const [editingTag, setEditingTag] = useState<Tag | null>(null)
   const [deletingTag, setDeletingTag] = useState<Tag | null>(null)
   const [isCreating, setIsCreating] = useState(false)
   const [notificationsEnabled, setNotificationsEnabled] = useState(false)
+  const [pendingRestore, setPendingRestore] = useState<File | null>(null)
+  const [isRestoring, setIsRestoring] = useState(false)
+  const [dataError, setDataError] = useState<string | null>(null)
+  const [dataNotice, setDataNotice] = useState<string | null>(null)
+  const restoreInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     setNotificationsEnabled(isNotificationEnabled())
@@ -102,6 +123,53 @@ function Settings() {
     setNotificationsEnabled(granted)
     if (granted) {
       await scheduleNotification()
+    }
+  }
+
+  const handleExport = async () => {
+    setDataError(null)
+    setDataNotice(null)
+    try {
+      downloadBytes(await exportDatabase(), backupFilename(new Date()))
+    } catch (error) {
+      setDataError(error instanceof Error ? error.message : 'Export failed')
+    }
+  }
+
+  const handleRestoreFileChosen = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] ?? null
+    event.target.value = ''
+    setDataError(null)
+    setDataNotice(null)
+    setPendingRestore(file)
+  }
+
+  const handleRestoreConfirmed = async () => {
+    if (!pendingRestore) return
+    setIsRestoring(true)
+    let outcome: RestoreOutcome
+    try {
+      const bytes = new Uint8Array(await pendingRestore.arrayBuffer())
+      outcome = await restoreDatabase(bytes, (currentBytes) =>
+        downloadBytes(currentBytes, backupFilename(new Date(), 'before-restore'))
+      )
+    } catch (error) {
+      setDataError(error instanceof Error ? error.message : 'Restore failed')
+      return
+    } finally {
+      setIsRestoring(false)
+      setPendingRestore(null)
+    }
+    // The data is already replaced, so a failure from here on is not a failed restore
+    setDataNotice(`Restored from ${pendingRestore.name}`)
+    if (outcome.resaveError) {
+      setDataError('Restore applied, but saving it may not have completed. Export a backup to be safe.')
+    }
+    try {
+      await queryClient.invalidateQueries()
+      if (isNotificationEnabled()) await scheduleNotification()
+    } catch {
+      setDataError('Restore applied, but the screen may be out of date. Reload the app.')
     }
   }
 
@@ -268,6 +336,79 @@ function Settings() {
           ))}
         </CardContent>
       </Card>
+
+      {/* Data */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">Data</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            Export everything to a file, or restore from a file you exported earlier.
+          </p>
+          <div className="flex gap-2">
+            <Button variant="outline" className="flex-1" onClick={handleExport}>
+              <Download className="h-4 w-4 mr-2" />
+              Export data
+            </Button>
+            <Button
+              variant="outline"
+              className="flex-1"
+              onClick={() => restoreInputRef.current?.click()}
+            >
+              <Upload className="h-4 w-4 mr-2" />
+              Restore
+            </Button>
+            <input
+              ref={restoreInputRef}
+              type="file"
+              accept=".sqlite,application/x-sqlite3,application/vnd.sqlite3"
+              className="hidden"
+              onChange={handleRestoreFileChosen}
+            />
+          </div>
+          {dataNotice && <p className="text-sm text-muted-foreground">{dataNotice}</p>}
+          {dataError && (
+            <p role="alert" className="text-sm text-destructive">
+              {dataError}
+            </p>
+          )}
+        </CardContent>
+      </Card>
+
+      <Dialog
+        open={pendingRestore !== null}
+        onOpenChange={(open) => !open && !isRestoring && setPendingRestore(null)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Restore from {pendingRestore?.name}?</DialogTitle>
+          </DialogHeader>
+          <p className="text-muted-foreground">
+            This replaces all current contacts, tags and check-ins with the contents of the file.
+            A copy of your current data is kept on this device, and a backup file is offered as a
+            download first.
+          </p>
+          <div className="flex gap-2 mt-4">
+            <Button
+              variant="outline"
+              className="flex-1"
+              disabled={isRestoring}
+              onClick={() => setPendingRestore(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              className="flex-1"
+              disabled={isRestoring}
+              onClick={handleRestoreConfirmed}
+            >
+              Restore
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* About */}
       <Card>

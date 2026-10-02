@@ -64,6 +64,8 @@ export async function showDueContactsNotification(): Promise<void> {
   }
 }
 
+let pendingTimer: ReturnType<typeof setTimeout> | null = null
+
 export async function scheduleNotification(): Promise<void> {
   await initDB()
   const enabled = getSetting('notification_enabled')
@@ -86,8 +88,9 @@ export async function scheduleNotification(): Promise<void> {
   // Store the scheduled time
   setSetting('next_notification_at', String(scheduledTime.getTime()))
 
-  // Set a timeout for the notification
-  setTimeout(async () => {
+  // Set a timeout for the notification, replacing any earlier one so only one chain runs
+  if (pendingTimer !== null) clearTimeout(pendingTimer)
+  pendingTimer = setTimeout(async () => {
     await showDueContactsNotification()
     // Schedule the next one
     scheduleNotification()
