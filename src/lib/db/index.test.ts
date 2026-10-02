@@ -108,6 +108,15 @@ function dumpTables(database: Database): Record<string, unknown[][]> {
   )
 }
 
+test('SCHEMA stamps the database with schema version 1, and an export keeps it', async () => {
+  const SQL = await initSqlJs()
+  const source = await createTestDb()
+
+  const exported = new SQL.Database(source.export())
+
+  assert.equal(exported.exec('PRAGMA user_version')[0].values[0][0], 1)
+})
+
 test('validateBackup accepts a real export', async () => {
   const SQL = await initSqlJs()
   const source = await createTestDb()

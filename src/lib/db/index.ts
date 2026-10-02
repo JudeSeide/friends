@@ -45,6 +45,9 @@ CREATE TABLE IF NOT EXISTS settings (
 CREATE INDEX IF NOT EXISTS idx_contacts_tag ON contacts(tag_id);
 CREATE INDEX IF NOT EXISTS idx_contacts_checkin ON contacts(last_checkin_at);
 CREATE INDEX IF NOT EXISTS idx_checkins_contact ON checkins(contact_id);
+
+-- Lets a future migration upgrade an older backup instead of rejecting it
+PRAGMA user_version = 1;
 `
 
 const DEFAULT_TAGS: Omit<Tag, 'id'>[] = [
