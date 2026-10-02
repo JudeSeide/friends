@@ -145,11 +145,14 @@ function Settings() {
     setIsRestoring(true)
     try {
       const bytes = new Uint8Array(await pendingRestore.arrayBuffer())
-      await restoreDatabase(bytes, (currentBytes) =>
+      const outcome = await restoreDatabase(bytes, (currentBytes) =>
         downloadBytes(currentBytes, backupFilename(new Date()))
       )
       await queryClient.invalidateQueries()
       if (isNotificationEnabled()) await scheduleNotification()
+      if (outcome.resaveError) {
+        setDataError('Restore applied, but saving it may not have completed. Export a backup to be safe.')
+      }
     } catch (error) {
       setDataError(error instanceof Error ? error.message : 'Restore failed')
     }

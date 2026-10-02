@@ -300,7 +300,7 @@ test('commitRestore saves before the swap, saves again after it, and closes the 
   const events: string[] = []
   let live: Database | null = null
 
-  await commitRestore(
+  const outcome = await commitRestore(
     current,
     restored,
     async (bytes) => {
@@ -316,6 +316,7 @@ test('commitRestore saves before the swap, saves again after it, and closes the 
   )
 
   assert.deepEqual(events, ['save-start', 'save-end', 'activate', 'save-start', 'save-end'])
+  assert.equal(outcome.resaveError, null)
   assert.equal(live, restored)
   assert.throws(() => current.exec('SELECT 1'))
   assert.deepEqual(dumpTables(restored), expected)
@@ -339,4 +340,27 @@ test('validateBackup rejects a file that quick_check reports problems for withou
   assert.notDeepEqual(rows, [['ok']], 'fixture must make quick_check return problem rows')
 
   assert.throws(() => validateBackup(SQL, bytes), /damaged/)
+})
+
+test('commitRestore reports a failed second save without rejecting, after the swap happened', async () => {
+  const current = await createTestDb()
+  const restored = await createTestDb()
+  let saves = 0
+  let live: Database | null = null
+
+  const outcome = await commitRestore(
+    current,
+    restored,
+    async () => {
+      saves += 1
+      if (saves === 2) throw new Error('second write failed')
+    },
+    (database) => {
+      live = database
+    }
+  )
+
+  assert.equal(live, restored)
+  assert.throws(() => current.exec('SELECT 1'))
+  assert.equal(outcome.resaveError?.message, 'second write failed')
 })

@@ -211,12 +211,16 @@ export async function exportDatabase(): Promise<Uint8Array> {
 // Writes the restored data to storage before it becomes the live database. A failed write
 // closes the replacement and leaves the current database open and live. After the swap the
 // restored data is saved once more, superseding any write the old database queued meanwhile.
+// Once the swap happened the restore has succeeded: a failure of that second save is returned
+// as resaveError instead of rejecting, so the caller can still refresh and warn.
+export type RestoreOutcome = { resaveError: Error | null }
+
 export async function commitRestore(
   current: Database,
   restored: Database,
   save: (bytes: Uint8Array) => Promise<void>,
   activate: (database: Database) => void
-): Promise<void> {
+): Promise<RestoreOutcome> {
   try {
     await save(restored.export())
   } catch (error) {
@@ -226,15 +230,20 @@ export async function commitRestore(
   activate(restored)
   current.close()
   // A write queued on the old database during the first save would otherwise land last
-  await save(restored.export())
+  try {
+    await save(restored.export())
+  } catch (error) {
+    return { resaveError: error instanceof Error ? error : new Error(String(error)) }
+  }
+  return { resaveError: null }
 }
 
-export async function restoreDatabase(bytes: Uint8Array, backup: BackupSink): Promise<void> {
+export async function restoreDatabase(bytes: Uint8Array, backup: BackupSink): Promise<RestoreOutcome> {
   const current = await initDB()
   if (!sqlModule) throw new Error('Database not initialized')
 
   const restored = await prepareRestore(sqlModule, current, bytes, backup)
-  await commitRestore(current, restored, saveToIndexedDB, (database) => {
+  return commitRestore(current, restored, saveToIndexedDB, (database) => {
     db = database
   })
 }
