@@ -87,6 +87,7 @@ async function saveToIndexedDB(data: Uint8Array): Promise<void> {
       store.put(data, 'data')
       tx.oncomplete = () => resolve()
       tx.onerror = () => reject(tx.error)
+      tx.onabort = () => reject(tx.error ?? new Error('IndexedDB write aborted'))
     }
     request.onerror = () => reject(request.error)
   })
